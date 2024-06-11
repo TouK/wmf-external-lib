@@ -1,0 +1,140 @@
+# This workflow will do a clean install of node dependencies, build the source code and run tests across different versions of node
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-nodejs-with-github-actions
+
+name: CI
+
+on:
+  push:
+    branches: [ master, dev ]
+  pull_request:
+    branches: [ master, dev ]
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      git_source_branch: ${{ steps.variables.outputs.git_source_branch }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 100
+      - name: Define variables
+        id: variables
+        shell: bash
+        run: |
+          GIT_SOURCE_BRANCH=`([ "${GITHUB_HEAD_REF}" != "" ] && echo "${GITHUB_HEAD_REF}" || echo "${GITHUB_REF}") | sed 's/refs\/heads\///g'`
+          echo "git_source_branch=$GIT_SOURCE_BRANCH" >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [ setup ]
+
+    strategy:
+      matrix:
+        node-version: [ 20 ]
+
+    steps:
+      - name: Cancel previous runs
+        uses: styfle/cancel-workflow-action@0.11.0
+        with:
+          access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v3
+      - uses: actions/cache@v3
+        with:
+          path: |
+            **/node_modules
+          key: ${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm ci
+      - run: npm run build --if-present
+      - run: npm test
+
+      - name: Find diffs
+        if: failure() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        id: snapshots_diffs
+        shell: bash
+        run: |
+          echo "found=$(find . -iname '*.diff.png' | wc -l)" >> $GITHUB_OUTPUT
+      - name: update snapshots
+        if: ${{ always() && steps.snapshots_diffs.outputs.found > 0 }}
+        run: npm run test:cypress:ci:update
+      - name: Create Pull Request
+        id: update_snapshots
+        if: always() && steps.snapshots_diffs.outputs.found > 0 && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          HASH: ${{ format('#{0}', github.event.number) }}
+          BRANCH: ${{ needs.setup.outputs.git_source_branch }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: ${{ env.BRANCH }}
+          branch: snapshots-patch/${{ env.BRANCH }}
+          title: Update Cypress snapshots in ${{ env.BRANCH }}
+          commit-message: Updated snapshots
+          body: Updated snapshots in ${{ github.event_name == 'pull_request' && env.HASH || env.BRANCH}}
+        uses: peter-evans/create-pull-request@v4
+      - name: Comment PR
+        if: ${{ always() && github.event_name == 'pull_request' && steps.update_snapshots.outputs.pull-request-number }}
+        uses: thollander/actions-comment-pull-request@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          message: '${{ steps.update_snapshots.outputs.pull-request-operation }}: #${{ steps.update_snapshots.outputs.pull-request-number }}'
+
+      - uses: codecov/codecov-action@v3
+      - name: Store test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            cypress/**/__image_snapshots__/**/*.diff.*
+            cypress/**/__image_snapshots__/**/*.actual.*
+            cypress/screenshots/
+            cypress/videos/
+          if-no-files-found: ignore
+
+  release:
+    name: Release
+    needs: [ "build" ]
+    if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v3
+        with:
+          path: |
+            **/node_modules
+          key: ${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release
+
+#  docs:
+#    runs-on: ubuntu-latest
+#    needs: [ "build", "release" ]
+#    if: ${{ github.ref == 'refs/heads/master' }}
+#    steps:
+#      - uses: actions/checkout@v3
+#      - uses: actions/setup-node@v3
+#        with:
+#          node-version: 20
+#      - uses: actions/cache@v3
+#        with:
+#          path: |
+#            **/node_modules
+#          key: ${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+#      - run: npm ci
+#      - run: npm run deploy-storybook -- --ci --host-token-env-variable=GITHUB_TOKEN
+#        env:
+#          GITHUB_TOKEN: JulianWielga:${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,13 @@
+node_modules
+lib/
+esm/
+cjs/
+types/
+storybook-static
+.idea
+
+.nyc_output
+coverage
+cypress/videos
+cypress/screenshots
+cypress/**/__image_snapshots__/*
