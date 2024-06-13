@@ -1,0 +1,1 @@
+export { useFederatedModule } from "./useFederatedModule";
