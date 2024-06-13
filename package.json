@@ -55,7 +55,6 @@
         "react": "^17 || ^18",
         "react-dom": "^17 || ^18"
     },
-    "private": "true",
     "repository": "touk/federated-component.git",
     "scripts": {
         "prebuild": "rimraf cjs/* esm/*",
